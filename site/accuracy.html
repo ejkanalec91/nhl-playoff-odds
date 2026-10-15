@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Accuracy</title>
+<meta name="description" content="How accurate the playoff odds model has been, tested on three past NHL seasons.">
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .calib .dot { stroke: var(--surface); stroke-width: 2; }
+  .calib .diag { stroke: var(--axis); stroke-width: 1; }
+  .calib .hit { fill: transparent; cursor: default; outline: none; }
+  .calib .axis-title { fill: var(--muted); font-size: 11px; }
+  .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .legend-row { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
+  .legend-row span { display: inline-flex; gap: 6px; align-items: center; }
+  .best { font-weight: 700; }
+</style>
+</head>
+<body>
+<header class="site-header"></header>
+<main>
+  <h1>How accurate is the model?</h1>
+  <p class="lede" id="lede">Loading…</p>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section>
+    <div class="section-head">
+      <div>
+        <h2>Game predictions: are the percentages honest?</h2>
+        <p>Each dot groups games by the home team's predicted win chance. On the diagonal line means "when we said 60%, it happened 60% of the time." Groups with fewer than 50 games are too noisy to plot and appear only in the table.</p>
+      </div>
+    </div>
+    <div class="card">
+      <div id="game-calib"></div>
+      <details class="table-view">
+        <summary>Show as table</summary>
+        <div class="table-wrap" id="game-calib-table"></div>
+      </details>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div>
+        <h2>Season by season</h2>
+        <p>Log loss: lower is better. A model that always says 50% scores 0.693.</p>
+      </div>
+    </div>
+    <div class="card table-wrap" style="padding:4px 8px 8px"><table id="seasons"></table></div>
+  </section>
+
+  <section id="tuning-section" hidden>
+    <div class="section-head">
+      <div>
+        <h2>What we tried: tuning the settings</h2>
+        <p id="tuning-sub"></p>
+      </div>
+    </div>
+    <div class="card table-wrap" style="padding:4px 8px 8px"><table id="tuning"></table></div>
+    <p class="meta" id="tuning-note"></p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div>
+        <h2>Playoff odds: error by point in the season</h2>
+        <p>Brier score of each team's playoff odds on the first of the month (lower is better), vs. a coin-flip simulation that knows the standings but treats every game as 50/50.</p>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <div class="legend-row" id="month-legend"></div>
+        <div id="month-chart"></div>
+        <details class="table-view">
+          <summary>Show as table</summary>
+          <div class="table-wrap" id="month-table"></div>
+        </details>
+      </div>
+      <div class="card">
+        <h3>Playoff odds calibration</h3>
+        <div id="po-calib"></div>
+        <details class="table-view">
+          <summary>Show as table</summary>
+          <div class="table-wrap" id="po-calib-table"></div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <section class="prose">
+    <h2>How we tested</h2>
+    <p>We replayed the 2023-24, 2024-25 and 2025-26 seasons. Before each game day the model was refit using only games already played, exactly as it runs live, then its predictions were compared with what happened.</p>
+    <p>The model's settings (how much last season counts, how fast ratings react, how blowouts are capped) were chosen using only <b>2023-24 and 2024-25</b>. <b>2025-26 was held out</b> as a test the model never saw while being tuned, so its numbers are the most honest estimate of live accuracy.</p>
+    <p><b>Brier score</b> is the average of (prediction − outcome)². <b>Log loss</b> is similar but punishes confident misses much harder. For both, lower is better.</p>
+  </section>
+</main>
+<footer class="site-footer"></footer>
+
+<script src="assets/common.js"></script>
+<script>
+const MONTH_LABELS = { "11-01": "Nov 1", "12-01": "Dec 1", "01-01": "Jan 1", "02-01": "Feb 1", "03-01": "Mar 1", "04-01": "Apr 1" };
+let acc;
+
+function seasonLabel(s) { s = String(s); return `${s.slice(0, 4)}-${s.slice(6)}`; }
+
+// Calibration scatter: predicted (x) vs. actual (y), with the perfect-calibration diagonal
+function calibrationChart(container, bins, ariaLabel) {
+  container.innerHTML = "";
+  container.classList.add("chart", "calib");
+  const width = Math.max(container.clientWidth, 260);
+  const height = Math.min(360, width);
+  const m = { top: 10, right: 12, bottom: 38, left: 44 };
+  const w = width - m.left - m.right, h = height - m.top - m.bottom;
+  const x = v => m.left + v * w, y = v => m.top + h - v * h;
+  const NS = "http://www.w3.org/2000/svg";
+  const s = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
+  const svg = s("svg", { viewBox: `0 0 ${width} ${height}`, height, role: "img", "aria-label": ariaLabel });
+  const grid = s("g", { class: "grid" });
+  for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+    grid.append(s("line", { x1: m.left, x2: m.left + w, y1: y(t), y2: y(t), class: t === 0 ? "base" : "" }));
+    const ly = s("text", { x: m.left - 6, y: y(t) + 4, "text-anchor": "end", class: "tick" }); ly.textContent = fmtPct(t); grid.append(ly);
+    const lx = s("text", { x: x(t), y: m.top + h + 16, "text-anchor": "middle", class: "tick" }); lx.textContent = fmtPct(t); grid.append(lx);
+  }
+  const xt = s("text", { x: m.left + w / 2, y: height - 4, "text-anchor": "middle", class: "axis-title" }); xt.textContent = "Predicted";
+  const yt = s("text", { x: 12, y: m.top + h / 2, "text-anchor": "middle", class: "axis-title", transform: `rotate(-90 12 ${m.top + h / 2})` }); yt.textContent = "Actually happened";
+  svg.append(grid, xt, yt, s("line", { x1: x(0), y1: y(0), x2: x(1), y2: y(1), class: "diag" }));
+
+  const tip = el("div", { class: "tooltip", hidden: true });
+  const color = seriesColor(0);
+  for (const b of bins) {
+    const cx = x(b.predicted), cy = y(b.actual);
+    svg.append(s("circle", { cx, cy, r: 5, fill: color, class: "dot" }));
+    const hit = s("circle", { cx, cy, r: 13, class: "hit", tabindex: 0 });
+    const show = () => {
+      tip.replaceChildren(el("div", { class: "t-date" }, `${b.n.toLocaleString()} predictions`),
+        el("div", { class: "t-row" }, el("span", {}, "Predicted"), el("b", {}, fmtPct(b.predicted))),
+        el("div", { class: "t-row" }, el("span", {}, "Happened"), el("b", {}, fmtPct(b.actual))));
+      tip.hidden = false;
+      const left = cx + 14 + tip.offsetWidth > width ? cx - 14 - tip.offsetWidth : cx + 14;
+      tip.style.left = left + "px";
+      tip.style.top = Math.max(0, cy - 30) + "px";
+    };
+    hit.addEventListener("pointerenter", show);
+    hit.addEventListener("focus", show);
+    hit.addEventListener("pointerleave", () => tip.hidden = true);
+    hit.addEventListener("blur", () => tip.hidden = true);
+    svg.append(hit);
+  }
+  container.append(svg, tip);
+}
+
+function calibTable(bins) {
+  return el("table", {},
+    el("thead", {}, el("tr", {}, ["Predicted range", "Predictions", "Avg. predicted", "Actually happened"].map(h => el("th", {}, h)))),
+    el("tbody", {}, bins.map(b => el("tr", {},
+      el("td", {}, `${fmtPct(b.lo)}–${fmtPct(b.hi)}`), el("td", {}, b.n.toLocaleString()),
+      el("td", {}, fmtPct(b.predicted)), el("td", {}, fmtPct(b.actual))))));
+}
+
+function renderCharts() {
+  calibrationChart(document.getElementById("game-calib"), acc.game_calibration.filter(b => b.n >= 50),
+    "Predicted vs. actual home win rate for game predictions");
+  calibrationChart(document.getElementById("po-calib"), acc.playoff_calibration,
+    "Predicted vs. actual playoff qualification rate");
+
+  const months = Object.keys(acc.playoffs_by_month);
+  const vals = k => months.map(mm => acc.playoffs_by_month[mm][k].brier);
+  const yMax = Math.ceil(Math.max(...vals("coin_flip"), ...vals("model")) * 20) / 20;
+  lineChart(document.getElementById("month-chart"), {
+    dates: months, xLabels: months.map(mm => MONTH_LABELS[mm]), yMax, height: 260,
+    format: v => v.toFixed(2),
+    series: [
+      { id: "model", label: "Model", color: seriesColor(0), emphasis: true, values: vals("model") },
+      { id: "coin", label: "Coin flip", color: seriesColor(1), emphasis: true, values: vals("coin_flip") },
+    ],
+    ariaLabel: "Playoff odds Brier score by month, model vs. coin flip",
+  });
+}
+
+async function main() {
+  const latest = await loadJSON("latest.json").catch(() => null);
+  renderChrome("accuracy.html", latest?.as_of);
+  acc = await loadJSON("accuracy.json");
+
+  const test = acc.games_test, all = acc.games_all;
+  document.getElementById("lede").textContent =
+    `Tested on ${all.n.toLocaleString()} games from three past seasons, replayed day by day with no peeking ahead.`;
+
+  const po = acc.playoffs_all;
+  const improve = 1 - po.model.brier / po.coin_flip.brier;
+  document.getElementById("tiles").replaceChildren(
+    el("div", { class: "tile hero" }, el("div", { class: "label" }, "Games picked correctly"),
+      el("div", { class: "value" }, (all.accuracy * 100).toFixed(1) + "%"),
+      el("div", { class: "sub" }, `All three seasons · ${(test.accuracy * 100).toFixed(1)}% on the held-out 2025-26 test`)),
+    el("div", { class: "tile" }, el("div", { class: "label" }, "Game log loss"),
+      el("div", { class: "value" }, all.log_loss.toFixed(3)),
+      el("div", { class: "sub" }, "Always-50% scores 0.693 · lower is better")),
+    el("div", { class: "tile" }, el("div", { class: "label" }, "Playoff odds vs. coin flip"),
+      el("div", { class: "value" }, `${Math.round(improve * 100)}% less error`),
+      el("div", { class: "sub" }, `Brier ${po.model.brier.toFixed(3)} vs. ${po.coin_flip.brier.toFixed(3)}`))
+  );
+
+  const cols = [["model", "Model"], ["home_ice_only", "Home ice only"], ["coin_flip", "Coin flip"]];
+  document.getElementById("seasons").replaceChildren(
+    el("thead", {}, el("tr", {}, el("th", {}, "Season"), cols.map(([, l]) => el("th", {}, l + " log loss")), el("th", {}, "Model picks correct"))),
+    el("tbody", {}, Object.entries(acc.seasons).map(([season, s]) => {
+      const best = Math.min(...cols.map(([k]) => s[k].log_loss));
+      return el("tr", {},
+        el("td", {}, seasonLabel(season), acc.test.includes(Number(season)) ? el("span", { class: "tag" }, "test") : null),
+        cols.map(([k]) => el("td", { class: s[k].log_loss === best ? "best" : null }, s[k].log_loss.toFixed(3))),
+        el("td", {}, (s.model.accuracy * 100).toFixed(1) + "%"));
+    })));
+
+  if (acc.tuning) {
+    const live = acc.tuning.find(r => r.shrink === acc.settings.shrink && r.carryover === acc.settings.carryover && r.margin_cap === acc.settings.margin_cap);
+    const best = acc.tuning[0];
+    const describe = r => `Last season counts ${Math.round(r.carryover * 100)}% · prior worth ${r.shrink} games · blowouts capped at ${r.margin_cap}`;
+    document.getElementById("tuning-section").hidden = false;
+    document.getElementById("tuning-sub").textContent =
+      `We tested ${acc.tuning.length} combinations, choosing only by the training seasons (${acc.train.map(seasonLabel).join(", ")}), then checked the winner on the held-out ${acc.test.map(seasonLabel).join(", ")} season.`;
+    const rows = [["Live settings", live], ["Best on training seasons", best]].filter(([, r]) => r);
+    document.getElementById("tuning").replaceChildren(
+      el("thead", {}, el("tr", {}, ["", "Settings", "Training log loss", "Test log loss"].map((h, i) =>
+        el("th", { style: i === 1 ? "text-align:left" : null }, h)))),
+      el("tbody", {}, rows.map(([label, r]) => el("tr", {},
+        el("td", {}, label), el("td", { style: "text-align:left" }, describe(r)),
+        el("td", {}, r.train_log_loss.toFixed(4)), el("td", {}, r.test_log_loss.toFixed(4))))));
+    if (live && best !== live && best.test_log_loss > live.test_log_loss) {
+      document.getElementById("tuning-note").textContent =
+        "The tuned settings did better on the seasons they were tuned on but worse on the season they hadn't seen. " +
+        "That's overfitting: in 2023-25 last season's best teams stayed good, so trusting last season paid off; in 2025-26 several of them missed the playoffs. " +
+        "We kept the original settings.";
+    }
+  }
+
+  document.getElementById("month-legend").replaceChildren(
+    ...[["Model", 0], ["Coin flip", 1]].map(([l, i]) => el("span", {}, el("i", { class: "swatch", style: `background:${seriesColor(i)}` }), l)));
+  const months = Object.keys(acc.playoffs_by_month);
+  document.getElementById("month-table").replaceChildren(el("table", {},
+    el("thead", {}, el("tr", {}, ["Date", "Model Brier", "Coin flip Brier", "Picked correctly"].map(h => el("th", {}, h)))),
+    el("tbody", {}, months.map(mm => {
+      const r = acc.playoffs_by_month[mm];
+      return el("tr", {}, el("td", {}, MONTH_LABELS[mm]), el("td", {}, r.model.brier.toFixed(3)),
+        el("td", {}, r.coin_flip.brier.toFixed(3)), el("td", {}, fmtPct(r.model.accuracy)));
+    }))));
+  document.getElementById("game-calib-table").replaceChildren(calibTable(acc.game_calibration));
+  document.getElementById("po-calib-table").replaceChildren(calibTable(acc.playoff_calibration));
+
+  renderCharts();
+  onResize(renderCharts);
+}
+main().catch(err => { document.getElementById("lede").textContent = "Couldn't load data: " + err.message; });
+</script>
+</body>
+</html>

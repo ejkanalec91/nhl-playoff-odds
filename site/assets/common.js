@@ -69,7 +69,7 @@ function teamLink(abbrev, label) {
 }
 
 function renderChrome(active, asOf) {
-  const links = [["index.html", "Standings odds"], ["games.html", "Games"], ["about.html", "Method"]];
+  const links = [["index.html", "Standings odds"], ["games.html", "Games"], ["accuracy.html", "Accuracy"], ["about.html", "Method"]];
   document.querySelector(".site-header").append(
     el("div", { class: "inner" },
       el("a", { class: "brand", href: "index.html" }, "Playoff Odds"),
@@ -94,6 +94,8 @@ function renderChrome(active, asOf) {
  */
 function lineChart(container, opts) {
   const { dates, series, yMax = 1, format = fmtPct, height = 300, refLine = null } = opts;
+  const xTick = i => opts.xLabels ? opts.xLabels[i] : fmtDate(dates[i]);
+  const xTip = i => opts.xLabels ? opts.xLabels[i] : fmtDate(dates[i], true);
   container.innerHTML = "";
   container.classList.add("chart");
   const width = Math.max(container.clientWidth, 280);
@@ -126,7 +128,7 @@ function lineChart(container, opts) {
   const step = Math.max(1, Math.ceil((n - 1) / maxTicks));
   for (let i = 0; i < n; i += step) {
     const label = svgEl("text", { x: x(i), y: margin.top + h + 18, "text-anchor": i === 0 ? "start" : "middle", class: "tick" });
-    label.textContent = fmtDate(dates[i]);
+    label.textContent = xTick(i);
     grid.append(label);
   }
   svg.append(grid);
@@ -183,7 +185,7 @@ function lineChart(container, opts) {
     }
     const rows = tipSeries.filter(s => s.values[i] != null).sort((a, b) => b.values[i] - a.values[i]).slice(0, 8);
     tip.replaceChildren(
-      el("div", { class: "t-date" }, fmtDate(dates[i], true)),
+      el("div", { class: "t-date" }, xTip(i)),
       ...rows.map(s => el("div", { class: "t-row" },
         el("span", {}, s.emphasis ? el("i", { class: "swatch", style: `background:${s.color}` }) : null, s.label),
         el("b", {}, format(s.values[i]))))

@@ -21,6 +21,15 @@ Then open http://localhost:8000.
 
 Options: `--rebuild` recomputes the whole season's history, `--sims 2000` runs faster, `--as-of 2026-11-01` computes the odds as of a past date.
 
+## Backtest
+
+```powershell
+.\.venv\Scripts\python -m model.backtest          # grade the live settings on 2023-24 to 2025-26
+.\.venv\Scripts\python -m model.backtest --tune   # also grid-search settings (train on 2023-25, test on 2025-26)
+```
+
+This writes `site/data/accuracy.json` for the accuracy page. It takes a few minutes, and isn't part of the nightly job.
+
 ## Deploy
 
 A GitHub Actions workflow ([.github/workflows/nightly.yml](.github/workflows/nightly.yml)) runs every morning. It reruns the model, commits the new data and publishes `site/` to GitHub Pages.

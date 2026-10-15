@@ -59,23 +59,19 @@ def standings(done, teams):
     return rec
 
 
-def run_as_of(as_of, games, teams, meta, params, prior, table, n_sims, with_stakes=False):
-    """Fit and simulate using only games finished before `as_of`.
-
-    with_stakes runs a second simulation with ratings held fixed, so a game's
-    "stakes" measure the effect of the result itself rather than what a win
-    implies about how good the team is.
-    """
+def split_games(games, as_of):
+    """(finished before as_of, everything else)."""
     cutoff = as_of.isoformat()
     done = [g for g in games if g["final"] and g["date"] < cutoff]
     remaining = [g for g in games if not (g["final"] and g["date"] < cutoff)]
-    b2b = rt.back_to_backs(games)
+    return done, remaining
 
-    r, r_sd, *_ = rt.fit(done, teams, b2b, prior=prior, params=params)
+
+def sim_state(done, remaining, teams, meta, b2b):
+    """Current standings plus the remaining schedule, in the simulator's format."""
     rec = standings(done, teams)
     idx = {t: i for i, t in enumerate(teams)}
-
-    state = {
+    return rec, {
         "teams": teams,
         "conf": [meta[t]["conf"] for t in teams],
         "div": [meta[t]["div"] for t in teams],
@@ -87,6 +83,20 @@ def run_as_of(as_of, games, teams, meta, params, prior, table, n_sims, with_stak
         "away": np.array([idx[g["away"]] for g in remaining], int),
         "b2b": np.array([int(b2b[g["id"]][1]) - int(b2b[g["id"]][0]) for g in remaining], float),
     }
+
+
+def run_as_of(as_of, games, teams, meta, params, prior, table, n_sims, with_stakes=False, settings=rt.DEFAULT):
+    """Fit and simulate using only games finished before `as_of`.
+
+    with_stakes runs a second simulation with ratings held fixed, so a game's
+    "stakes" measure the effect of the result itself rather than what a win
+    implies about how good the team is.
+    """
+    done, remaining = split_games(games, as_of)
+    b2b = rt.back_to_backs(games)
+    r, r_sd, *_ = rt.fit(done, teams, b2b, prior=prior, params=params, settings=settings)
+    rec, state = sim_state(done, remaining, teams, meta, b2b)
+
     seed = int(as_of.strftime("%Y%m%d"))
     sim = simulate(state, r, r_sd, params, table, n_sims, seed)
     stakes = simulate(state, r, np.zeros_like(r_sd), params, table, n_sims, seed + 1) if with_stakes else None
@@ -131,8 +141,7 @@ def main():
     params, prev_ratings = rt.league_params(prev_games, prev_teams)
     print(f"League params from {prev_season}: {params}")
 
-    prior = np.array([rt.PRIOR_CARRYOVER * prev_ratings.get(t, 0.0) for t in teams])
-    prior -= prior.mean()
+    prior = rt.preseason_prior(teams, prev_ratings)
     table = rt.OutcomeTable(params)
 
     saved = load_json("history.json", {})

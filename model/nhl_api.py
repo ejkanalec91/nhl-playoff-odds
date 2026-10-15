@@ -52,6 +52,24 @@ def current_teams():
     return season, teams
 
 
+def final_standings(season):
+    """For a finished season: {abbrev: {name, short, conf, div, made_playoffs}}."""
+    seasons = get_json("standings-season", "standings_seasons.json")["seasons"]
+    end = next(s["standingsEnd"] for s in seasons if s["id"] == season)
+    data = get_json(f"standings/{end}", f"standings_{season}_final.json")
+    return {
+        row["teamAbbrev"]["default"]: {
+            "name": row["teamName"]["default"],
+            "short": row["teamCommonName"]["default"],
+            "conf": row["conferenceName"],
+            "div": row["divisionName"],
+            # x/y/z/p = clinched a playoff spot; e or blank = missed
+            "made_playoffs": row.get("clinchIndicator") in ("x", "y", "z", "p"),
+        }
+        for row in data["standings"]
+    }
+
+
 def season_games(season, team_abbrevs, use_cache=False):
     """All regular-season games for a season, de-duplicated and normalized.
 
