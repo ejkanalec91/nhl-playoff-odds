@@ -12,7 +12,7 @@ CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache"
 FINAL_STATES = {"OFF", "FINAL"}
 
 
-def get_json(path, cache_name=None, retries=4):
+def get_json(path, cache_name=None, retries=6):
     """GET a JSON endpoint. If cache_name is given, reuse a cached copy on disk."""
     cache_file = CACHE_DIR / cache_name if cache_name else None
     if cache_file and cache_file.exists():
@@ -24,10 +24,11 @@ def get_json(path, cache_name=None, retries=4):
             resp.raise_for_status()
             data = resp.json()
             break
-        except requests.RequestException:
+        except requests.RequestException as err:
             if attempt == retries - 1:
                 raise
-            time.sleep(2 ** attempt)
+            print(f"  retrying {path} after error: {err}")
+            time.sleep(2 ** attempt)  # 1, 2, 4, 8, 16 seconds
 
     if cache_file:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
