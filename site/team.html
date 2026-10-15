@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team Playoff Odds</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="site-header"></header>
+<main>
+  <div class="controls">
+    <select id="team-pick" aria-label="Choose a team"></select>
+  </div>
+  <h1 id="team-name">Loading…</h1>
+  <p class="lede" id="team-sub"></p>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section>
+    <div class="section-head">
+      <h2>Playoff odds over the season</h2>
+    </div>
+    <div class="card">
+      <div id="chart"></div>
+      <details class="table-view">
+        <summary>Show as table</summary>
+        <div class="table-wrap" id="chart-table"></div>
+      </details>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>How far they go</h2>
+      <p>Chance of reaching each stage</p>
+    </div>
+    <div class="card"><div class="hbars" id="rounds"></div></div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Biggest upcoming games</h2>
+      <p>Games where a win vs. a loss moves their playoff odds the most</p>
+    </div>
+    <div class="card table-wrap" style="padding:4px 8px 8px"><table id="big-games"></table></div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Schedule</h2>
+      <div class="seg" role="group" aria-label="Show games" id="sched-toggle">
+        <button type="button" data-v="upcoming" aria-pressed="true">Upcoming</button>
+        <button type="button" data-v="results" aria-pressed="false">Results</button>
+      </div>
+    </div>
+    <div class="card table-wrap" style="padding:4px 8px 8px"><table id="schedule"></table></div>
+  </section>
+</main>
+<footer class="site-footer"></footer>
+
+<script src="assets/common.js"></script>
+<script>
+let latest, history, games, team, names, schedView = "upcoming";
+
+function tile(label, value, sub, hero) {
+  return el("div", { class: "tile" + (hero ? " hero" : "") },
+    el("div", { class: "label" }, label), el("div", { class: "value" }, value), sub ? el("div", { class: "sub" }, sub) : null);
+}
+
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+function teamGames() {
+  return games.filter(g => g.home === team.abbrev || g.away === team.abbrev).map(g => {
+    const home = g.home === team.abbrev;
+    return {
+      ...g, home,
+      opp: home ? g.away : g.home,
+      pWin: g.p_home == null ? null : home ? g.p_home : 1 - g.p_home,
+      ifWin: home ? g.home_if_win : g.away_if_win,
+      ifLoss: home ? g.home_if_loss : g.away_if_loss,
+      b2b: home ? g.b2b_home : g.b2b_away,
+    };
+  });
+}
+
+function upcomingRow(g) {
+  return el("tr", {},
+    el("td", {}, fmtDate(g.date, true)),
+    el("td", { style: "text-align:left" }, g.home ? "vs " : "@ ", teamLink(g.opp, names[g.opp]),
+      g.b2b ? el("span", { class: "tag", title: "Second night of a back-to-back" }, "B2B") : null),
+    el("td", {}, fmtPct(g.pWin)),
+    el("td", {}, fmtPct(g.ifWin)),
+    el("td", {}, fmtPct(g.ifLoss)),
+    el("td", {}, Math.round((g.ifWin - g.ifLoss) * 100) + " pts"));
+}
+const upcomingHead = () => el("thead", {}, el("tr", {},
+  ["Date", "Opponent", "Win chance", "Odds if win", "Odds if loss", "Swing"].map((h, i) =>
+    el("th", { style: i === 1 ? "text-align:left" : null }, h))));
+
+function renderSchedule() {
+  const tg = teamGames();
+  const table = document.getElementById("schedule");
+  if (schedView === "upcoming") {
+    const up = tg.filter(g => g.hg == null);
+    table.replaceChildren(upcomingHead(), el("tbody", {}, up.length ? up.map(upcomingRow)
+      : el("tr", {}, el("td", { colspan: 6 }, "No games left."))));
+  } else {
+    const done = tg.filter(g => g.hg != null).reverse();
+    table.replaceChildren(
+      el("thead", {}, el("tr", {}, ["Date", "Opponent", "Result", "Score", "Pregame win chance"].map((h, i) =>
+        el("th", { style: i === 1 ? "text-align:left" : null }, h)))),
+      el("tbody", {}, done.length ? done.map(g => {
+        const gf = g.home ? g.hg : g.ag, ga = g.home ? g.ag : g.hg;
+        const res = gf > ga ? "W" : g.lp === "REG" ? "L" : "OTL";
+        const pre = g.pre == null ? null : g.home ? g.pre : 1 - g.pre;
+        return el("tr", {},
+          el("td", {}, fmtDate(g.date, true)),
+          el("td", { style: "text-align:left" }, g.home ? "vs " : "@ ", teamLink(g.opp, names[g.opp])),
+          el("td", {}, res + (g.lp !== "REG" ? ` (${g.lp})` : "")),
+          el("td", {}, `${gf}–${ga}`),
+          el("td", {}, fmtPct(pre)));
+      }) : el("tr", {}, el("td", { colspan: 5 }, "No games played yet."))));
+  }
+}
+
+function renderChart() {
+  const dates = Object.keys(history.days);
+  const values = dates.map(d => history.days[d][team.abbrev]?.[0] ?? null);
+  lineChart(document.getElementById("chart"), {
+    dates, height: 260, refLine: 0.5,
+    series: [{ id: team.abbrev, label: team.abbrev, color: seriesColor(0), emphasis: true, values }],
+    ariaLabel: `${team.name} playoff odds by date`,
+  });
+  document.getElementById("chart-table").replaceChildren(el("table", {},
+    el("thead", {}, el("tr", {}, el("th", {}, "Date"), el("th", {}, "Playoff odds"), el("th", {}, "Cup odds"), el("th", {}, "Proj. pts"))),
+    el("tbody", {}, [...dates].reverse().map(d => {
+      const v = history.days[d][team.abbrev];
+      return el("tr", {}, el("td", {}, fmtDate(d)), el("td", {}, fmtPct(v?.[0])), el("td", {}, fmtPct(v?.[1])), el("td", {}, v ? Math.round(v[2]) : "–"));
+    }))));
+}
+
+function render() {
+  document.title = `${team.name} Playoff Odds`;
+  document.getElementById("team-name").textContent = team.name;
+  const divRank = latest.teams.filter(t => t.div === team.div).sort((a, b) => b.pts - a.pts || a.gp - b.gp)
+    .findIndex(t => t.abbrev === team.abbrev) + 1;
+  document.getElementById("team-sub").textContent =
+    `${team.w}-${team.l}-${team.otl}, ${team.pts} points · ${ordinal(divRank)} in the ${team.div} Division · ` +
+    `Rating ${fmtSigned(team.rating)} goals/game (${ordinal([...latest.teams].sort((a, b) => b.rating - a.rating).findIndex(t => t.abbrev === team.abbrev) + 1)} in NHL)`;
+
+  const dates = Object.keys(history.days);
+  const weekAgo = history.days[dates[Math.max(0, dates.length - 8)]]?.[team.abbrev]?.[0];
+  const delta = weekAgo == null ? null : Math.round((team.playoffs - weekAgo) * 100);
+  document.getElementById("tiles").replaceChildren(
+    tile("Make playoffs", fmtPct(team.playoffs), delta == null ? null : `${delta > 0 ? "▲ " : delta < 0 ? "▼ " : ""}${delta === 0 ? "No change" : Math.abs(delta) + " pts"} in the last week`, true),
+    tile("Projected points", Math.round(team.proj_pts), `Likely range ${team.pts_p10}–${team.pts_p90}`),
+    tile("Win division", fmtPct(team.div_win)),
+    tile("Win Stanley Cup", fmtPct(team.cup)),
+    tile("Schedule difficulty", ordinal(team.sos_rank), `hardest remaining of 32 · avg. opponent ${fmtSigned(team.sos)}`)
+  );
+
+  const stages = [["Make playoffs", team.playoffs], ["Win round 1", team.round2], ["Win round 2", team.conf_final],
+    ["Win conference", team.final], ["Win Stanley Cup", team.cup]];
+  document.getElementById("rounds").replaceChildren(...stages.flatMap(([label, p]) => [
+    el("span", {}, label),
+    el("div", { class: "track" }, el("div", { class: "fill", style: `width:${p * 100}%` })),
+    el("span", { class: "val" }, fmtPct(p)),
+  ]));
+
+  const big = teamGames().filter(g => g.hg == null && g.ifWin != null)
+    .sort((a, b) => (b.ifWin - b.ifLoss) - (a.ifWin - a.ifLoss)).slice(0, 5)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  document.getElementById("big-games").replaceChildren(upcomingHead(), el("tbody", {}, big.map(upcomingRow)));
+
+  renderChart();
+  renderSchedule();
+}
+
+async function main() {
+  [latest, history, games] = await Promise.all([loadJSON("latest.json"), loadJSON("history.json"), loadJSON("games.json").then(d => d.games)]);
+  renderChrome("", latest.as_of);
+  names = Object.fromEntries(latest.teams.map(t => [t.abbrev, t.short]));
+  const abbrev = new URLSearchParams(location.search).get("t");
+  team = latest.teams.find(t => t.abbrev === abbrev) || [...latest.teams].sort((a, b) => b.playoffs - a.playoffs)[0];
+
+  const pick = document.getElementById("team-pick");
+  pick.append(...[...latest.teams].sort((a, b) => a.name.localeCompare(b.name)).map(t => el("option", { value: t.abbrev }, t.name)));
+  pick.value = team.abbrev;
+  pick.addEventListener("change", e => {
+    team = latest.teams.find(t => t.abbrev === e.target.value);
+    window.history.replaceState(null, "", `?t=${team.abbrev}`);
+    render();
+  });
+
+  document.querySelectorAll("#sched-toggle button").forEach(b => b.addEventListener("click", () => {
+    schedView = b.dataset.v;
+    document.querySelectorAll("#sched-toggle button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    renderSchedule();
+  }));
+
+  render();
+  onResize(renderChart);
+}
+main().catch(err => { document.getElementById("team-name").textContent = "Couldn't load data: " + err.message; });
+</script>
+</body>
+</html>

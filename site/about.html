@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How the Model Works</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="prose">
+  <h1>How the model works</h1>
+  <p class="lede">Every night the model rates all 32 teams, then plays out the rest of the season and the playoffs 10,000 times. A team's playoff odds are the share of those simulated seasons in which it made the playoffs.</p>
+
+  <h2>1. Rate every team</h2>
+  <p>Each team gets one number: how many goals per game better or worse than an average team it is. The ratings come from goal margins in every game played so far, adjusted for the strength of each opponent, home ice and back-to-backs.</p>
+  <p>Early in the season a few games tell us little, so every rating starts from a preseason estimate (half of the team's rating from last season) and moves away from it as games are played. A team needs about 35 games before its results this season count for more than the preseason estimate.</p>
+  <p>Shootout wins count as ties for the ratings, and blowouts are capped at four goals so that empty-net goals don't distort them.</p>
+
+  <h2>2. Turn ratings into game odds</h2>
+  <p>The difference between two teams' ratings, plus home ice and a back-to-back penalty, gives an expected goal margin. That margin gives the chance of a regulation win, a regulation tie (overtime) or a regulation loss, calibrated to how often NHL games really go to overtime. Home ice, the back-to-back effect and the overtime rate are all measured from last season's games.</p>
+
+  <h2>3. Simulate the season</h2>
+  <p>Each simulation plays every remaining game: wins are worth 2 points and overtime or shootout losses 1. Ties in the standings are broken with the NHL's tiebreakers: regulation wins, then regulation plus overtime wins, then total wins. The top three teams in each division and two wildcards per conference make the playoffs. The bracket is then played out with best-of-seven series, with home ice to the better regular-season team.</p>
+  <p>Each simulation also adds random variation to every team's rating, because we're never certain how good a team really is. That keeps the odds from being overconfident.</p>
+
+  <h2>Stakes</h2>
+  <p>The stakes for a game compare a team's playoff odds across the simulated seasons where it won that game with those where it lost.</p>
+
+  <h2>What's next</h2>
+  <ul>
+    <li><b>Expected goals (xG):</b> rate teams by the quality of the shots they create and allow, not just goals, which is a more stable signal.</li>
+    <li><b>Goalies:</b> adjust each game for the likely starting goaltender.</li>
+  </ul>
+
+  <h2>Data</h2>
+  <p>Schedules and results come from the NHL's public web API. This is an unofficial fan project and is not affiliated with or endorsed by the NHL.</p>
+</main>
+<footer class="site-footer"></footer>
+<script src="assets/common.js"></script>
+<script>
+loadJSON("latest.json").then(d => renderChrome("about.html", d.as_of)).catch(() => renderChrome("about.html"));
+</script>
+</body>
+</html>

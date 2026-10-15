@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NHL Game Odds</title>
+<meta name="description" content="Win probabilities for every NHL game, and how each result would move both teams' playoff odds.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="site-header"></header>
+<main>
+  <h1>Game odds</h1>
+  <p class="lede">Win probability for every game on the schedule. <b>Stakes</b> show each team's playoff odds if it wins or loses that game.</p>
+
+  <div class="controls">
+    <button type="button" id="prev" aria-label="Previous day">‹</button>
+    <input type="date" id="date" aria-label="Date">
+    <button type="button" id="next" aria-label="Next day">›</button>
+    <button type="button" id="today">Today</button>
+    <select id="team" aria-label="Filter by team"></select>
+  </div>
+  <p class="meta" id="summary"></p>
+  <div class="games" id="games"></div>
+  <p class="meta" id="record"></p>
+</main>
+<footer class="site-footer"></footer>
+
+<script src="assets/common.js"></script>
+<script>
+let data, latest, names;
+const params = new URLSearchParams(location.search);
+const state = { date: params.get("date"), team: params.get("team") || "" };
+
+function sync() {
+  const q = new URLSearchParams();
+  if (state.team) q.set("team", state.team);
+  else if (state.date) q.set("date", state.date);
+  history.replaceState(null, "", "?" + q.toString());
+}
+
+function gameCard(g) {
+  const done = g.hg != null;
+  const pHome = done ? g.pre : g.p_home;
+  const sides = [
+    { abbrev: g.away, p: pHome == null ? null : 1 - pHome, goals: g.ag, tag: g.b2b_away ? "B2B" : null },
+    { abbrev: g.home, p: pHome, goals: g.hg, tag: g.b2b_home ? "B2B" : null, home: true },
+  ];
+  const winner = done ? (g.hg > g.ag ? g.home : g.away) : null;
+
+  const matchup = el("div", { class: "matchup" },
+    sides.map(s => el("div", { class: "side" + (done && s.abbrev !== winner ? " loser" : "") },
+      el("span", { class: "name" }, teamLink(s.abbrev, names[s.abbrev]), s.home ? el("span", { class: "tag" }, "Home") : null,
+        s.tag ? el("span", { class: "tag", title: "Played the day before" }, s.tag) : null),
+      done ? el("span", { class: "score" }, s.goals) : el("span", { class: "p" }, fmtPct(s.p))))
+  );
+  if (pHome != null) {
+    matchup.append(el("div", { class: "split", role: "img",
+      "aria-label": `${g.away} ${fmtPct(1 - pHome)}, ${g.home} ${fmtPct(pHome)}` },
+      el("span", { class: "a", style: `width:${(1 - pHome) * 100}%` }),
+      el("span", { class: "h", style: `width:${pHome * 100}%` })));
+  }
+  let foot;
+  if (done) {
+    const fav = pHome == null ? null : pHome >= 0.5 ? g.home : g.away;
+    const ok = fav === winner;
+    foot = el("div", { class: "game-foot" },
+      g.lp !== "REG" ? `Final (${g.lp}) · ` : "Final · ",
+      fav ? el("span", {}, `Pregame: ${fav} ${fmtPct(Math.max(pHome, 1 - pHome))} `,
+        el("span", { class: ok ? "pick-right" : "pick-wrong" }, ok ? "✓ favorite won" : "✗ upset")) : "No pregame odds");
+  } else {
+    foot = el("div", { class: "game-foot" }, `Chance of overtime: ${fmtPct(g.p_ot)}`);
+  }
+  matchup.append(foot);
+
+  const stakes = el("div", { class: "stakes" });
+  if (!done && g.home_if_win != null) {
+    stakes.append(el("div", { class: "meta" }, "Playoff odds with a win / loss"));
+    for (const [abbrev, win, loss] of [[g.away, g.away_if_win, g.away_if_loss], [g.home, g.home_if_win, g.home_if_loss]]) {
+      stakes.append(el("div", { class: "row" },
+        el("span", { class: "lbl" }, abbrev),
+        el("span", { class: "range" }, `${fmtPct(win)} / ${fmtPct(loss)}`,
+          el("span", { class: "meta" }, `  (${Math.round((win - loss) * 100)}-pt swing)`))));
+    }
+  }
+  return el("div", { class: "card game" }, matchup, stakes);
+}
+
+function render() {
+  const container = document.getElementById("games");
+  const teamMode = !!state.team;
+  ["prev", "next", "today", "date"].forEach(id => document.getElementById(id).disabled = teamMode);
+  document.getElementById("date").value = state.date;
+
+  let list;
+  if (teamMode) {
+    list = data.games.filter(g => g.home === state.team || g.away === state.team);
+    document.getElementById("summary").textContent = `${names[state.team]}: full schedule, ${list.length} games.`;
+  } else {
+    list = data.games.filter(g => g.date === state.date);
+    const done = list.filter(g => g.hg != null && g.pre != null);
+    const right = done.filter(g => (g.pre >= 0.5) === (g.hg > g.ag)).length;
+    document.getElementById("summary").textContent = list.length
+      ? `${fmtDate(state.date, true)} · ${list.length} game${list.length > 1 ? "s" : ""}` +
+        (done.length ? ` · Favorites won ${right} of ${done.length}` : "")
+      : "";
+  }
+  if (!list.length) {
+    container.replaceChildren(el("p", { class: "empty" }, `No games on ${fmtDate(state.date, true)}.`));
+    return;
+  }
+  if (teamMode) {
+    const byDate = [];
+    for (const g of list) byDate.push(el("h3", { style: "margin:14px 0 0" }, fmtDate(g.date, true)), gameCard(g));
+    container.replaceChildren(...byDate);
+  } else {
+    // Biggest stakes first for upcoming games
+    const swing = g => g.home_if_win == null ? 0 : (g.home_if_win - g.home_if_loss) + (g.away_if_win - g.away_if_loss);
+    container.replaceChildren(...[...list].sort((a, b) => swing(b) - swing(a)).map(gameCard));
+  }
+}
+
+function moveTo(date) {
+  state.date = date;
+  sync();
+  render();
+}
+
+async function main() {
+  [data, latest] = await Promise.all([loadJSON("games.json"), loadJSON("latest.json")]);
+  renderChrome("games.html", latest.as_of);
+  names = Object.fromEntries(latest.teams.map(t => [t.abbrev, t.short]));
+  const dates = [...new Set(data.games.map(g => g.date))].sort();
+  const first = dates[0], last = dates[dates.length - 1];
+  if (!state.date) state.date = dates.find(d => d >= data.as_of) || last;
+
+  const dateInput = document.getElementById("date");
+  dateInput.min = first;
+  dateInput.max = last;
+  dateInput.addEventListener("change", e => e.target.value && moveTo(e.target.value));
+  document.getElementById("prev").addEventListener("click", () => moveTo([...dates].reverse().find(d => d < state.date) || first));
+  document.getElementById("next").addEventListener("click", () => moveTo(dates.find(d => d > state.date) || last));
+  document.getElementById("today").addEventListener("click", () => moveTo(dates.find(d => d >= data.as_of) || last));
+
+  const teamSelect = document.getElementById("team");
+  teamSelect.append(el("option", { value: "" }, "All teams (by date)"),
+    ...[...latest.teams].sort((a, b) => a.name.localeCompare(b.name)).map(t => el("option", { value: t.abbrev }, t.name)));
+  teamSelect.value = state.team;
+  teamSelect.addEventListener("change", e => { state.team = e.target.value; sync(); render(); });
+
+  const graded = data.games.filter(g => g.hg != null && g.pre != null);
+  const right = graded.filter(g => (g.pre >= 0.5) === (g.hg > g.ag)).length;
+  if (graded.length) {
+    document.getElementById("record").textContent =
+      `Season to date, the model's favorite has won ${right} of ${graded.length} games (${fmtPct(right / graded.length)}). ` +
+      `Odds for finished games are as of the morning of the game.`;
+  }
+  render();
+}
+main().catch(err => { document.getElementById("summary").textContent = "Couldn't load data: " + err.message; });
+</script>
+</body>
+</html>

@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NHL Playoff Odds</title>
+<meta name="description" content="Every NHL team's chance of making the playoffs and winning the Stanley Cup, updated nightly from 10,000 season simulations.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="site-header"></header>
+<main>
+  <h1>NHL playoff odds</h1>
+  <p class="lede" id="lede">Loading…</p>
+
+  <section style="margin-top:0">
+    <div class="section-head">
+      <h2>Odds by team</h2>
+      <div class="seg" role="group" aria-label="Group teams by" id="group-toggle">
+        <button type="button" data-group="div" aria-pressed="true">Division</button>
+        <button type="button" data-group="conf" aria-pressed="false">Conference</button>
+        <button type="button" data-group="league" aria-pressed="false">League</button>
+      </div>
+    </div>
+    <div class="card table-wrap" style="padding:4px 8px 8px">
+      <table id="odds-table">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="meta">Rating is goals per game better (+) or worse (−) than an average team, adjusted for opponents. Click a column to sort.</p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div>
+        <h2>Playoff odds over the season</h2>
+        <p id="chart-sub">Pick up to four teams to compare.</p>
+      </div>
+    </div>
+    <div class="controls">
+      <select id="team-add" aria-label="Add a team to the chart"></select>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="card">
+      <div id="history-chart"></div>
+      <details class="table-view">
+        <summary>Show as table</summary>
+        <div class="table-wrap" id="history-table"></div>
+      </details>
+    </div>
+  </section>
+</main>
+<footer class="site-footer"></footer>
+
+<script src="assets/common.js"></script>
+<script>
+const COLUMNS = [
+  { key: "team", label: "Team" },
+  { key: "gp", label: "GP", wide: true },
+  { key: "record", label: "W-L-OTL", sort: t => t.w * 2 + t.otl, wide: true },
+  { key: "pts", label: "Pts" },
+  { key: "rating", label: "Rating", wide: true },
+  { key: "proj_pts", label: "Proj. pts" },
+  { key: "playoffs", label: "Playoffs", odds: true },
+  { key: "div_win", label: "Win div.", odds: true },
+  { key: "presidents", label: "Pres. Trophy", odds: true, wide: true },
+  { key: "final", label: "Make Final", odds: true, wide: true },
+  { key: "cup", label: "Win Cup", odds: true },
+];
+// Columns marked `wide` are hidden on phones
+
+let state = { group: "div", sort: "playoffs", dir: -1, picked: [] };
+let latest, history;
+
+function sortValue(t, key) {
+  const col = COLUMNS.find(c => c.key === key);
+  if (col.sort) return col.sort(t);
+  if (key === "team") return t.name;
+  return t[key];
+}
+
+function renderTable() {
+  const table = document.getElementById("odds-table");
+  const head = el("tr", {}, COLUMNS.map(c => {
+    const th = el("th", { class: "sortable" + (c.wide ? " wide" : ""), scope: "col", tabindex: 0,
+      "aria-sort": state.sort === c.key ? (state.dir < 0 ? "descending" : "ascending") : null }, c.label);
+    const go = () => {
+      if (state.sort === c.key) state.dir *= -1;
+      else { state.sort = c.key; state.dir = c.key === "team" ? 1 : -1; }
+      renderTable();
+    };
+    th.addEventListener("click", go);
+    th.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+    return th;
+  }));
+  table.tHead.replaceChildren(head);
+
+  const groupKey = t => state.group === "div" ? t.div : state.group === "conf" ? t.conf + "ern Conference" : "League";
+  const groups = new Map();
+  for (const t of latest.teams) {
+    const g = groupKey(t);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(t);
+  }
+  const order = [...groups.keys()].sort((a, b) => {
+    const conf = s => latest.teams.find(t => groupKey(t) === s).conf;
+    return conf(a).localeCompare(conf(b)) || a.localeCompare(b);
+  });
+
+  const rows = [];
+  for (const g of order) {
+    const teams = groups.get(g).sort((a, b) => {
+      const va = sortValue(a, state.sort), vb = sortValue(b, state.sort);
+      return (va < vb ? -1 : va > vb ? 1 : 0) * state.dir || b.playoffs - a.playoffs;
+    });
+    if (state.group !== "league") rows.push(el("tr", { class: "group-row" }, el("td", { colspan: COLUMNS.length }, g)));
+    for (const t of teams) {
+      rows.push(el("tr", {},
+        el("td", { class: "team-cell" },
+          teamLink(t.abbrev, el("span", { class: "full" }, t.name)), el("span", { class: "abbr" }, teamLink(t.abbrev))),
+        el("td", { class: "wide" }, t.gp),
+        el("td", { class: "wide" }, `${t.w}-${t.l}-${t.otl}`),
+        el("td", {}, t.pts),
+        el("td", { class: "wide" }, fmtSigned(t.rating)),
+        el("td", { title: `80% range: ${t.pts_p10}–${t.pts_p90}` }, Math.round(t.proj_pts)),
+        ...COLUMNS.filter(c => c.odds).map(c => {
+          const td = oddsCell(t[c.key]);
+          if (c.wide) td.classList.add("wide");
+          return td;
+        })
+      ));
+    }
+  }
+  table.tBodies[0].replaceChildren(...rows);
+}
+
+function historyDates() {
+  return Object.keys(history.days);
+}
+
+function defaultPicks() {
+  // Biggest movers over the last week
+  const dates = historyDates();
+  const last = history.days[dates[dates.length - 1]];
+  const prior = history.days[dates[Math.max(0, dates.length - 8)]];
+  return latest.teams
+    .map(t => ({ a: t.abbrev, d: Math.abs(last[t.abbrev][0] - prior[t.abbrev][0]) }))
+    .sort((x, y) => y.d - x.d).slice(0, 4)
+    .map((t, slot) => ({ abbrev: t.a, slot }));
+}
+
+function renderHistory() {
+  const dates = historyDates();
+  const byAbbrev = Object.fromEntries(latest.teams.map(t => [t.abbrev, t]));
+  const pickedSet = new Map(state.picked.map(p => [p.abbrev, p.slot]));
+
+  const series = latest.teams.map(t => ({
+    id: t.abbrev,
+    label: t.abbrev,
+    emphasis: pickedSet.has(t.abbrev),
+    color: pickedSet.has(t.abbrev) ? seriesColor(pickedSet.get(t.abbrev)) : null,
+    values: dates.map(d => history.days[d][t.abbrev]?.[0] ?? null),
+  }));
+  lineChart(document.getElementById("history-chart"), {
+    dates, series, ariaLabel: "Playoff odds by date for selected teams; other teams shown in gray",
+  });
+
+  // Legend chips (color stays with the team, never repainted on removal)
+  const legend = document.getElementById("legend");
+  legend.replaceChildren(...state.picked.map(p => el("span", { class: "chip" },
+    el("i", { class: "swatch", style: `background:${seriesColor(p.slot)}` }),
+    byAbbrev[p.abbrev].name,
+    el("button", { type: "button", "aria-label": `Remove ${byAbbrev[p.abbrev].name}`, onclick: () => {
+      state.picked = state.picked.filter(x => x.abbrev !== p.abbrev);
+      storageSet("picked", state.picked);
+      renderHistory();
+    } }, "×"))));
+
+  const select = document.getElementById("team-add");
+  const full = state.picked.length >= 4;
+  select.disabled = full;
+  select.replaceChildren(
+    el("option", { value: "" }, full ? "Four teams max" : "Add a team…"),
+    ...[...latest.teams].sort((a, b) => a.name.localeCompare(b.name))
+      .filter(t => !pickedSet.has(t.abbrev))
+      .map(t => el("option", { value: t.abbrev }, t.name))
+  );
+
+  // Table view twin: selected teams (or all) by date, newest first
+  const shown = state.picked.length ? state.picked.map(p => p.abbrev) : latest.teams.map(t => t.abbrev);
+  document.getElementById("history-table").replaceChildren(el("table", {},
+    el("thead", {}, el("tr", {}, el("th", {}, "Date"), shown.map(a => el("th", {}, a)))),
+    el("tbody", {}, [...dates].reverse().map(d => el("tr", {},
+      el("td", {}, fmtDate(d)), shown.map(a => el("td", {}, fmtPct(history.days[d][a]?.[0]))))))
+  ));
+}
+
+async function main() {
+  [latest, history] = await Promise.all([loadJSON("latest.json"), loadJSON("history.json")]);
+  renderChrome("index.html", latest.as_of);
+  const gp = latest.teams.reduce((s, t) => s + t.gp, 0) / 2;
+  document.getElementById("lede").textContent =
+    `${latest.season.toString().slice(0, 4)}–${latest.season.toString().slice(6)} season · ${gp} games played · ` +
+    `Based on ${latest.sims.toLocaleString()} simulations of the rest of the season and playoffs, updated ${fmtDate(latest.as_of, true)}.`;
+
+  document.querySelectorAll("#group-toggle button").forEach(b => b.addEventListener("click", () => {
+    state.group = b.dataset.group;
+    document.querySelectorAll("#group-toggle button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    renderTable();
+  }));
+
+  const valid = new Set(latest.teams.map(t => t.abbrev));
+  const saved = storageGet("picked", null);
+  state.picked = Array.isArray(saved) && saved.every(p => valid.has(p.abbrev)) ? saved : defaultPicks();
+  if (!saved) document.getElementById("chart-sub").textContent = "Showing the four biggest movers of the past week. Pick up to four teams to compare.";
+
+  document.getElementById("team-add").addEventListener("change", e => {
+    const abbrev = e.target.value;
+    if (!abbrev) return;
+    const used = new Set(state.picked.map(p => p.slot));
+    const slot = [0, 1, 2, 3].find(s => !used.has(s));
+    state.picked.push({ abbrev, slot });
+    storageSet("picked", state.picked);
+    renderHistory();
+  });
+
+  renderTable();
+  renderHistory();
+  onResize(renderHistory);
+}
+main().catch(err => { document.getElementById("lede").textContent = "Couldn't load data: " + err.message; });
+</script>
+</body>
+</html>
